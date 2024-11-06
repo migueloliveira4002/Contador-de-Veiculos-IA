@@ -4,6 +4,12 @@ import numpy as np
 import time
 from pathlib import Path
 from collections import deque
+import os
+import google.generativeai as genai
+from google.ai.generativelanguage_v1beta.types import content
+
+os.environ['GEMINI_API_KEY'] = 'INSERT_HERE_API_KEY'
+genai.configure(api_key=os.environ['GEMINI_API_KEY'])
 
 # Caminho do vídeo
 video_path = Path.cwd() / "video" / "video1.mp4"
@@ -51,10 +57,58 @@ def is_in_detection_zone(x, y):
             detection_zone['y_min'] <= y <= detection_zone['y_max'])
 
 
+def classify_car(car_image_path):
+    file = genai.upload_file(car_image_path, mime_type="image/png")
+
+    generation_config = {
+        "temperature": 0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "max_output_tokens": 8192,
+        "response_schema": content.Schema(
+            type=content.Type.OBJECT,
+            properties={
+                "model": content.Schema(
+                    type=content.Type.STRING,
+                ),
+                "brand": content.Schema(
+                    type=content.Type.STRING,
+                ),
+            },
+        ),
+        "response_mime_type": "application/json",
+    }
+
+    model = genai.GenerativeModel(
+        model_name="gemini-1.5-flash",
+        generation_config=generation_config,
+    )
+
+    chat_session = model.start_chat(
+        history=[
+            {
+                "role": "user",
+                "parts": [
+                    file,
+                ],
+            },
+        ]
+    )
+
+    response = chat_session.send_message("Classify this car")
+    return response.text
+
+
 def resize_frame(frame, scale):
     width = int(frame.shape[1] * scale)
     height = int(frame.shape[0] * scale)
     return cv2.resize(frame, (width, height))
+
+
+def save_car_image(car_image, car_id):
+    car_image_path = f"./cars/car_{car_id}.png"
+    cv2.imwrite(car_image_path, car_image)
+    return car_image_path
 
 
 # Abrir vídeo
@@ -76,7 +130,10 @@ start_time = time.time()
 
 # Configurar a janela
 cv2.namedWindow("Car Detection", cv2.WINDOW_NORMAL)
+# Adicionar lista para armazenar classificações dos carros
+car_classifications = []
 
+# Modificar o loop principal para classificar apenas carros não contados
 while True:
     ret, frame = cap.read()
 
@@ -120,6 +177,15 @@ while True:
                         car_count += 1
                         car.counted = True
                         print(f"Novo carro detectado! Total: {car_count}")
+
+                        # Classificar o carro detectado
+                        car_image = original_frame[y1:y2, x1:x2]
+                        car_image_path = save_car_image(car_image, car.car_id)
+                        car_class = classify_car(car_image_path)
+                        # remove image
+                        os.remove(car_image_path)
+                        car_classifications.append((car.car_id, car_class))
+                        print(f"Carro classificado como: {car_class}")
                     break
 
             if not car_matched:
@@ -162,3 +228,8 @@ processing_time = end_time - start_time
 print(f"\nResultados finais:")
 print(f"Total de carros contados: {car_count}")
 print(f"Tempo total de processamento: {processing_time:.2f} segundos")
+
+# Mostrar classificações dos carros
+print(f"Classificações dos carros:")
+for car_id, car_class in car_classifications:
+    print(f"Carro ID {car_id}: {car_class}")
